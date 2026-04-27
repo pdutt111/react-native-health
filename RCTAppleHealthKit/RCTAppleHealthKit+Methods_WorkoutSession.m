@@ -261,12 +261,21 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
     NSLog(@"[iPhoneWorkout][native] HR samples received: %lu", (unsigned long)samples.count);
     NSDate *sessionStart = self.rnh_workoutSessionStart;
     HKUnit *bpm = [[HKUnit countUnit] unitDividedByUnit:[HKUnit minuteUnit]];
+    // Filter out HR samples written by THIS app — otherwise saveHeartRate
+    // writes from the JS layer feed back into the anchored query and the
+    // app sees its own value as a "new" sample, creating a loop where the
+    // last AirPods reading sticks forever after the buds come off.
+    NSString *ownBundle = [[NSBundle mainBundle] bundleIdentifier];
     NSMutableArray *out = [NSMutableArray arrayWithCapacity:samples.count];
     for (HKQuantitySample *s in samples) {
         if (![s isKindOfClass:[HKQuantitySample class]]) continue;
         // Drop samples that pre-date the session — anchored queries can
         // surface a tail of historical points on first results-handler fire.
         if (sessionStart && [s.endDate compare:sessionStart] == NSOrderedAscending) continue;
+        NSString *sourceBundle = s.sourceRevision.source.bundleIdentifier ?: @"";
+        if (ownBundle && [sourceBundle isEqualToString:ownBundle]) {
+            continue;  // ignore our own writes
+        }
         double value = [s.quantity doubleValueForUnit:bpm];
         if (value <= 0) continue;
         [out addObject:@{
@@ -274,7 +283,7 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
             @"startDate": @([s.startDate timeIntervalSince1970] * 1000),
             @"endDate": @([s.endDate timeIntervalSince1970] * 1000),
             @"sourceName": s.sourceRevision.source.name ?: @"",
-            @"sourceBundle": s.sourceRevision.source.bundleIdentifier ?: @"",
+            @"sourceBundle": sourceBundle,
         }];
     }
     if (out.count > 0) {
