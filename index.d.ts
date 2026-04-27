@@ -13,6 +13,54 @@ declare module 'react-native-health' {
     Units: Record<HealthUnit, HealthUnit>
   }
 
+  export interface WorkoutSessionStartOptions {
+    activityType?:
+      | 'Running'
+      | 'Cycling'
+      | 'Walking'
+      | 'HighIntensityIntervalTraining'
+      | 'FunctionalStrengthTraining'
+      | 'TraditionalStrengthTraining'
+      | 'MixedCardio'
+      | 'CoreTraining'
+      | 'Yoga'
+    locationType?: 'indoor' | 'outdoor' | 'unknown'
+  }
+
+  export interface WorkoutSessionStartResult {
+    started?: boolean
+    alreadyRunning?: boolean
+    /** Session start timestamp in ms since epoch. */
+    startDate?: number
+  }
+
+  export interface WorkoutSessionStopOptions {
+    /** ISO8601 timestamp captured at the user's stop press. */
+    endedAt?: string
+  }
+
+  export interface WorkoutSessionStopResult {
+    stopped: boolean
+    alreadyStopped?: boolean
+    /** Session end timestamp in ms since epoch. */
+    endDate?: number
+  }
+
+  export interface WorkoutSessionHeartRateSample {
+    /** BPM */
+    value: number
+    /** ms since epoch */
+    startDate: number
+    /** ms since epoch */
+    endDate: number
+    sourceName: string
+    sourceBundle: string
+  }
+
+  export interface WorkoutSessionHeartRateEvent {
+    samples: WorkoutSessionHeartRateSample[]
+  }
+
   export interface HKErrorResponse {
     message?: string
   }
@@ -373,6 +421,43 @@ declare module 'react-native-health' {
     saveWorkout(
       options: HealthActivityOptions,
       callback: (error: string, result: HealthValue) => void,
+    ): void
+
+    /**
+     * Reports whether an iPhone-driven HKWorkoutSession is supported on
+     * this device. Returns true only when iOS 17+, HealthKit available,
+     * and no Watch is paired (Watch takes precedence — when paired,
+     * callers should fall back to their existing flow).
+     */
+    isWorkoutSessionAvailable(
+      options: Object,
+      callback: (error: string, available: boolean) => void,
+    ): void
+
+    /**
+     * Starts an iPhone-driven HKWorkoutSession. Once active, HealthKit
+     * routes heart-rate samples from any connected source (AirPods Pro 3,
+     * Beats Pro 2, foreground Watch) into the session and the library
+     * emits them via the `WorkoutSessionHeartRate` event.
+     */
+    startWorkoutSession(
+      options: WorkoutSessionStartOptions,
+      callback: (
+        error: string,
+        result: WorkoutSessionStartResult,
+      ) => void,
+    ): void
+
+    /**
+     * Ends the active HKWorkoutSession. Pass `endedAt` (ISO8601) to record
+     * the user's local stop moment instead of when this call lands.
+     */
+    stopWorkoutSession(
+      options: WorkoutSessionStopOptions,
+      callback: (
+        error: string,
+        result: WorkoutSessionStopResult,
+      ) => void,
     ): void
 
     getAuthStatus(

@@ -31,6 +31,6 @@ A React Native package to interact with Apple HealthKit
 
   s.source_files = 'RCTAppleHealthKit/**/*'
 
-  s.frameworks = ['HealthKit']
+  s.frameworks = ['HealthKit', 'WatchConnectivity']
   s.dependency 'React'
 end

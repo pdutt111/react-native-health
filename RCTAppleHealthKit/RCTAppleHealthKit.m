@@ -19,6 +19,7 @@
 #import "RCTAppleHealthKit+Methods_Sleep.h"
 #import "RCTAppleHealthKit+Methods_Mindfulness.h"
 #import "RCTAppleHealthKit+Methods_Workout.h"
+#import "RCTAppleHealthKit+Methods_WorkoutSession.h"
 #import "RCTAppleHealthKit+Methods_LabTests.h"
 #import "RCTAppleHealthKit+Methods_Hearing.h"
 #import "RCTAppleHealthKit+Methods_Summary.h"
@@ -555,6 +556,24 @@ RCT_EXPORT_METHOD(saveWorkout:(NSDictionary *)input callback:(RCTResponseSenderB
     [self workout_save:input callback:callback];
 }
 
+RCT_EXPORT_METHOD(isWorkoutSessionAvailable:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
+{
+    [self _initializeHealthStore];
+    [self workoutSession_isAvailable:input callback:callback];
+}
+
+RCT_EXPORT_METHOD(startWorkoutSession:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
+{
+    [self _initializeHealthStore];
+    [self workoutSession_start:input callback:callback];
+}
+
+RCT_EXPORT_METHOD(stopWorkoutSession:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
+{
+    [self _initializeHealthStore];
+    [self workoutSession_stop:input callback:callback];
+}
+
 RCT_EXPORT_METHOD(getAuthStatus: (NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
 {
     [self _initializeHealthStore];
@@ -712,6 +731,9 @@ RCT_EXPORT_METHOD(getClinicalRecords:(NSDictionary *)input callback:(RCTResponse
         }
     }
     [supportedEvents addObject: @"change:steps"];
+    // iPhone HKWorkoutSession events — emitted by Methods_WorkoutSession.
+    [supportedEvents addObject: @"healthKit:WorkoutSession:heartRate"];
+    [supportedEvents addObject: @"healthKit:WorkoutSession:failure"];
   return supportedEvents;
 }
 
