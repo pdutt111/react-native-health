@@ -94,17 +94,24 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
 
 - (void)workoutSession_isAvailable:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback {
     BOOL available = NO;
+    NSString *reason = @"unknown";
 
     // iPhone-side HKWorkoutSession requires iOS 17+.
     if (@available(iOS 17.0, *)) {
         if ([HKHealthStore isHealthDataAvailable]) {
-            // Watch precedence: if a Watch is paired, do NOT report
-            // available — let the existing flow run unchanged.
-            if (![[self class] rnh_isWatchPaired]) {
-                available = YES;
-            }
+            available = YES;
+            reason = @"available";
+        } else {
+            reason = @"healthkit-not-available";
         }
+    } else {
+        reason = @"ios-below-17";
     }
+
+    NSLog(@"[iPhoneWorkout][native] isAvailable: %@ (reason=%@, watchPaired=%@)",
+          available ? @"YES" : @"NO",
+          reason,
+          [[self class] rnh_isWatchPaired] ? @"YES" : @"NO");
 
     callback(@[[NSNull null], @(available)]);
 }
@@ -133,9 +140,12 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
                                                                      configuration:config
                                                                               error:&sessionError];
         if (!session) {
+            NSLog(@"[iPhoneWorkout][native] start FAILED: %@", sessionError.localizedDescription);
             callback(@[RCTJSErrorFromNSError(sessionError)]);
             return;
         }
+        NSLog(@"[iPhoneWorkout][native] HKWorkoutSession created (activity=%@, location=%@)",
+              activityStr, locationStr);
 
         HKLiveWorkoutBuilder *builder = session.associatedWorkoutBuilder;
         builder.dataSource = [[HKLiveWorkoutDataSource alloc] initWithHealthStore:self.healthStore
@@ -143,7 +153,10 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
 
         NSDate *startDate = [NSDate date];
         [session startActivityWithDate:startDate];
+        NSLog(@"[iPhoneWorkout][native] startActivity at %@", startDate);
         [builder beginCollectionWithStartDate:startDate completion:^(BOOL success, NSError * _Nullable err) {
+            NSLog(@"[iPhoneWorkout][native] beginCollection success=%@ err=%@",
+                  success ? @"YES" : @"NO", err.localizedDescription ?: @"none");
             // Surface failures to the JS layer via an event so the caller
             // can decide to abort and fall back to the BLE/manual path.
             if (!success && err) {
@@ -245,6 +258,7 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
 
 - (void)rnh_emitHeartRateSamples:(NSArray<__kindof HKSample *> *)samples {
     if (samples.count == 0) return;
+    NSLog(@"[iPhoneWorkout][native] HR samples received: %lu", (unsigned long)samples.count);
     NSDate *sessionStart = self.rnh_workoutSessionStart;
     HKUnit *bpm = [[HKUnit countUnit] unitDividedByUnit:[HKUnit minuteUnit]];
     NSMutableArray *out = [NSMutableArray arrayWithCapacity:samples.count];
