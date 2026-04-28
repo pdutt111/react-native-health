@@ -228,24 +228,83 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
             [self.healthStore stopQuery:query];
         }
 
+        // Caller can pass discard=YES to drop the workout instead of
+        // saving it to HealthKit. Used by the Devices screen's scan-mode
+        // session: we keep an HKWorkoutSession running just to read
+        // AirPods HR live; if the user never actually starts a workout,
+        // we don't want the scan to surface in Apple Health as a bogus
+        // workout entry.
+        BOOL discard = [RCTAppleHealthKit boolFromOptions:input key:@"discard" withDefault:false];
+        void (^clearAndCallback)(NSDictionary *) = ^(NSDictionary *info) {
+            [self rnh_setWorkoutSession:nil];
+            [self rnh_setWorkoutBuilder:nil];
+            [self rnh_setWorkoutHRQuery:nil];
+            [self rnh_setWorkoutSessionStart:nil];
+            if (callback) callback(@[[NSNull null], info]);
+        };
+
+        if (discard) {
+            NSLog(@"[iPhoneWorkout][native] stop: discarding workout (scan-only session)");
+            // Discard order matters on iPhone HKWorkoutSession (iOS 17+):
+            //   1. Drop the builder's collected samples FIRST so a later
+            //      session.end() can't trigger an implicit save with the
+            //      data still attached.
+            //   2. End collection (best-effort — discardWorkout already
+            //      released the builder, so a subsequent endCollection /
+            //      finishWorkout is moot, but we run it for symmetry on
+            //      OS versions that strictly require it).
+            //   3. End the session itself.
+            //   4. Belt-and-suspenders: query Apple Health for any workout
+            //      this builder may still have committed and delete it.
+            //      Bug-driven — without this, brief sessions that timed
+            //      out the probe were still landing as saved workouts.
+            NSDate *sessionStartDate = self.rnh_workoutSessionStart;
+            [builder discardWorkout];
+            [session endCurrentActivityOnDate:endDate];
+            [session end];
+
+            // Sweep any HKWorkout the system saved despite the discard.
+            // Bound the search to this session's window so we never
+            // touch unrelated workouts.
+            if (sessionStartDate) {
+                NSPredicate *p = [HKQuery predicateForSamplesWithStartDate:sessionStartDate
+                                                                   endDate:[endDate dateByAddingTimeInterval:5]
+                                                                   options:HKQueryOptionStrictStartDate];
+                NSPredicate *appOnly = [HKQuery predicateForObjectsFromSource:[HKSource defaultSource]];
+                NSPredicate *both = [NSCompoundPredicate andPredicateWithSubpredicates:@[p, appOnly]];
+                HKSampleQuery *q = [[HKSampleQuery alloc]
+                    initWithSampleType:[HKObjectType workoutType]
+                             predicate:both
+                                 limit:HKObjectQueryNoLimit
+                       sortDescriptors:nil
+                        resultsHandler:^(HKSampleQuery * _Nonnull qq, NSArray<__kindof HKSample *> * _Nullable results, NSError * _Nullable error) {
+                    if (results.count == 0) return;
+                    NSLog(@"[iPhoneWorkout][native] discard: deleting %lu lingering workout(s) saved by the discarded session",
+                          (unsigned long)results.count);
+                    [self.healthStore deleteObjects:results withCompletion:^(BOOL ok, NSError * _Nullable derr) {
+                        if (!ok) NSLog(@"[iPhoneWorkout][native] discard: cleanup delete failed: %@", derr);
+                    }];
+                }];
+                [self.healthStore executeQuery:q];
+            }
+
+            clearAndCallback(@{
+                @"stopped": @YES,
+                @"discarded": @YES,
+                @"endDate": @([endDate timeIntervalSince1970] * 1000),
+            });
+            return;
+        }
+
         [session endCurrentActivityOnDate:endDate];
         [session end];
 
         [builder endCollectionWithEndDate:endDate completion:^(BOOL success, NSError * _Nullable err) {
             [builder finishWorkoutWithCompletion:^(HKWorkout * _Nullable workout, NSError * _Nullable finishErr) {
-                // Always clear refs even if finish failed — the session is
-                // terminated and no further samples should arrive.
-                [self rnh_setWorkoutSession:nil];
-                [self rnh_setWorkoutBuilder:nil];
-                [self rnh_setWorkoutHRQuery:nil];
-                [self rnh_setWorkoutSessionStart:nil];
-
-                if (callback) {
-                    callback(@[[NSNull null], @{
-                        @"stopped": @YES,
-                        @"endDate": @([endDate timeIntervalSince1970] * 1000),
-                    }]);
-                }
+                clearAndCallback(@{
+                    @"stopped": @YES,
+                    @"endDate": @([endDate timeIntervalSince1970] * 1000),
+                });
             }];
         }];
         return;
@@ -289,6 +348,75 @@ static char const * const kRNHWorkoutSessionStartKey = "RNHWorkoutSessionStart";
     if (out.count > 0) {
         [self sendEventWithName:@"healthKit:WorkoutSession:heartRate" body:@{@"samples": out}];
     }
+}
+
+#pragma mark - Bogus-workout sweeper
+
+// Retroactively cleans up "ghost" workouts that the iPhone HKWorkoutSession
+// path managed to commit to Apple Health despite a discardWorkout call —
+// either due to OS auto-finish behavior on session.end(), a force-quit, or
+// older builds without the discard support. Criteria for a bogus entry:
+//   • written by THIS app (HKSource defaultSource)
+//   • duration ≤ maxDurationSeconds (default 60s — the probe is 15s, but
+//     allow margin for force-quit-leaked sessions that ran a bit longer)
+//   • totalEnergyBurned < 1 kcal (no real exercise data)
+//
+// Both filters together protect against deleting a real, brief workout
+// where calorie computation hadn't landed yet — that case is rare and
+// would also tend to have HR samples driving energy>0 anyway.
+- (void)workoutSession_sweepBogus:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback {
+    double lookbackHours = [RCTAppleHealthKit doubleFromOptions:input key:@"lookbackHours" withDefault:7.0 * 24.0];
+    double maxDurationSec = [RCTAppleHealthKit doubleFromOptions:input key:@"maxDurationSeconds" withDefault:60.0];
+    double maxCalories = [RCTAppleHealthKit doubleFromOptions:input key:@"maxCalories" withDefault:1.0];
+
+    NSDate *now = [NSDate date];
+    NSDate *cutoff = [now dateByAddingTimeInterval:-lookbackHours * 3600.0];
+    NSPredicate *timePredicate = [HKQuery predicateForSamplesWithStartDate:cutoff
+                                                                   endDate:now
+                                                                   options:HKQueryOptionStrictStartDate];
+    NSPredicate *sourcePredicate = [HKQuery predicateForObjectsFromSource:[HKSource defaultSource]];
+    NSPredicate *combined = [NSCompoundPredicate andPredicateWithSubpredicates:@[timePredicate, sourcePredicate]];
+
+    HKSampleQuery *q = [[HKSampleQuery alloc]
+        initWithSampleType:[HKObjectType workoutType]
+                 predicate:combined
+                     limit:HKObjectQueryNoLimit
+           sortDescriptors:nil
+            resultsHandler:^(HKSampleQuery * _Nonnull qq, NSArray<__kindof HKSample *> * _Nullable results, NSError * _Nullable error) {
+        if (error) {
+            NSLog(@"[iPhoneWorkout][native] sweep: query failed: %@", error);
+            if (callback) callback(@[RCTMakeError(@"sweep query failed", nil, nil)]);
+            return;
+        }
+        NSMutableArray<HKWorkout *> *toDelete = [NSMutableArray array];
+        NSUInteger scanned = 0;
+        for (HKSample *sample in results) {
+            if (![sample isKindOfClass:[HKWorkout class]]) continue;
+            HKWorkout *w = (HKWorkout *)sample;
+            scanned++;
+            HKQuantity *energy = w.totalEnergyBurned;
+            double cals = energy ? [energy doubleValueForUnit:[HKUnit kilocalorieUnit]] : 0.0;
+            if (cals < maxCalories && w.duration <= maxDurationSec) {
+                [toDelete addObject:w];
+            }
+        }
+        if (toDelete.count == 0) {
+            NSLog(@"[iPhoneWorkout][native] sweep: 0 bogus workouts in %lu scanned", (unsigned long)scanned);
+            if (callback) callback(@[[NSNull null], @{@"deleted": @0, @"scanned": @(scanned)}]);
+            return;
+        }
+        NSLog(@"[iPhoneWorkout][native] sweep: deleting %lu bogus workout(s) of %lu scanned",
+              (unsigned long)toDelete.count, (unsigned long)scanned);
+        [self.healthStore deleteObjects:toDelete withCompletion:^(BOOL ok, NSError * _Nullable derr) {
+            if (!ok) NSLog(@"[iPhoneWorkout][native] sweep: delete failed: %@", derr);
+            if (callback) callback(@[[NSNull null], @{
+                @"deleted": @(toDelete.count),
+                @"scanned": @(scanned),
+                @"ok": @(ok),
+            }]);
+        }];
+    }];
+    [self.healthStore executeQuery:q];
 }
 
 @end

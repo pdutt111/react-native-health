@@ -83,6 +83,7 @@ export const HealthKit =
         isWorkoutSessionAvailable: AppleHealthKit.isWorkoutSessionAvailable,
         startWorkoutSession: AppleHealthKit.startWorkoutSession,
         stopWorkoutSession: AppleHealthKit.stopWorkoutSession,
+        sweepBogusWorkoutSessions: AppleHealthKit.sweepBogusWorkoutSessions,
         getAuthStatus: AppleHealthKit.getAuthStatus,
         getLatestBloodAlcoholContent: AppleHealthKit.getLatestBloodAlcoholContent,
         getBloodAlcoholContentSamples: AppleHealthKit.getBloodAlcoholContentSamples,

@@ -574,6 +574,12 @@ RCT_EXPORT_METHOD(stopWorkoutSession:(NSDictionary *)input callback:(RCTResponse
     [self workoutSession_stop:input callback:callback];
 }
 
+RCT_EXPORT_METHOD(sweepBogusWorkoutSessions:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
+{
+    [self _initializeHealthStore];
+    [self workoutSession_sweepBogus:input callback:callback];
+}
+
 RCT_EXPORT_METHOD(getAuthStatus: (NSDictionary *)input callback:(RCTResponseSenderBlock)callback)
 {
     [self _initializeHealthStore];

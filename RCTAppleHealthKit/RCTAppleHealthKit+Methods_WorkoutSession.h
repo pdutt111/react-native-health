@@ -19,5 +19,6 @@
 - (void)workoutSession_isAvailable:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback;
 - (void)workoutSession_start:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback;
 - (void)workoutSession_stop:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback;
+- (void)workoutSession_sweepBogus:(NSDictionary *)input callback:(RCTResponseSenderBlock)callback;
 
 @end
